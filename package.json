@@ -1,0 +1,24 @@
+{
+	"name": "react-tree-stream-monorepo",
+	"private": true,
+	"packageManager": "pnpm@9.0.0",
+	"workspaces": [
+		"package",
+		"test"
+	],
+	"scripts": {
+		"build": "pnpm -C package build",
+		"test": "pnpm -C test test",
+		"release": "pnpm -C package build && changeset publish"
+	},
+	"devDependencies": {
+		"@changesets/cli": "^2.27.8",
+		"typescript": "^5.5.4",
+		"tsup": "^8.1.0",
+		"vitest": "^2.0.5",
+		"@types/react": "^18.3.3",
+		"@types/node": "^20.14.10",
+		"react": "^18.2.0",
+		"react-dom": "^18.2.0"
+	}
+}

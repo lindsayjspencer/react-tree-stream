@@ -1,0 +1,51 @@
+## Dependencies
+node_modules/
+
+## Logs
+pnpm-debug.log*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+## Build outputs
+dist/
+**/dist/
+build/
+**/build/
+*.tsbuildinfo
+
+## Test / Coverage / Vite
+.vite/
+coverage/
+*.lcov
+
+## Env files
+.env
+.env.*
+!.env.example
+
+## OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Editor/IDE
+.idea/
+*.iml
+
+## pnpm local store (if configured locally)
+.pnpm-store/
+
+## Caches
+.cache/
+.eslintcache
+.stylelintcache
+
+## Package archives
+*.tgz
+
+## Temp files
+.tmp/
+temp/
+*.tmp

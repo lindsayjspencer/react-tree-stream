@@ -1,0 +1,37 @@
+{
+	"name": "react-tree-stream",
+	"version": "0.0.0",
+	"description": "Stream React trees recursively, LLM-style progressive rendering.",
+	"license": "MIT",
+	"author": "",
+	"repository": "",
+	"type": "module",
+	"main": "./dist/index.cjs",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"require": "./dist/index.cjs"
+		}
+	},
+	"sideEffects": false,
+	"scripts": {
+		"build": "tsup src/index.tsx --format cjs,esm --dts --sourcemap --clean",
+		"dev": "tsup src/index.tsx --format cjs,esm --dts --watch",
+		"prepublishOnly": "pnpm build"
+	},
+	"publishConfig": {
+		"access": "public",
+		"registry": "https://registry.npmjs.org"
+	},
+	"peerDependencies": {
+		"react": ">=18.0.0"
+	},
+	"devDependencies": {
+		"typescript": "^5.5.4",
+		"tsup": "^8.1.0",
+		"@types/react": "^18.3.3"
+	}
+}

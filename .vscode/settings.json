@@ -1,0 +1,22 @@
+{
+	"editor.formatOnSave": true,
+	"editor.codeActionsOnSave": {
+		"source.fixAll": "always"
+	},
+	"eslint.enable": true,
+	"eslint.workingDirectories": ["./package", "./test"],
+	"typescript.tsdk": "node_modules\\typescript\\lib",
+	"[typescriptreact]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	},
+	"[typescript]": {
+		"editor.defaultFormatter": "esbenp.prettier-vscode"
+	},
+	"prettier.useEditorConfig": true,
+	"prettier.jsxSingleQuote": false,
+	"prettier.printWidth": 120,
+	"prettier.tabWidth": 4,
+	"prettier.singleQuote": true,
+	"prettier.trailingComma": "all",
+	"prettier.useTabs": true
+}
