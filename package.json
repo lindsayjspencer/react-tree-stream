@@ -9,7 +9,7 @@
 	"scripts": {
 		"build": "pnpm -C package build",
 		"test": "pnpm -C test test",
-		"release": "pnpm -C package build && changeset publish"
+		"release": "pnpm -C package build && mv README.md ./package/ && changeset publish"
 	},
 	"devDependencies": {
 		"@changesets/cli": "^2.27.8",
