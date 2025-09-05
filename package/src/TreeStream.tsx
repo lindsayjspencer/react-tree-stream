@@ -7,20 +7,26 @@ type ExecutionUnit =
 	| { type: 'instant_render'; content: React.ReactElement }
 	| { type: 'nested_stream'; component: React.ReactElement };
 
-export interface TreeStreamProps {
-	as?: keyof JSX.IntrinsicElements;
+export type TreeStreamProps<T extends keyof JSX.IntrinsicElements | 'fragment' = 'div'> = {
+	as?: T;
 	children: React.ReactNode;
-	speed?: number; // words per tick
+	speed?: number; // units (words or chars) per tick
 	interval?: number; // ms per tick
+	streamBy?: 'word' | 'character';
 	autoStart?: boolean;
 	onComplete?: () => void;
-	className?: string;
-	[key: string]: unknown;
-}
+} & (T extends 'fragment'
+	? { className?: undefined }
+	: Omit<React.ComponentPropsWithoutRef<T & keyof JSX.IntrinsicElements>, 'as' | 'children'>);
 
 /* ----- stable ids (no Date.now) ----- */
 let __seq = 0;
 const newInstanceId = () => `ts-${++__seq}`;
+
+/* ----- type guard for fragment ----- */
+function isFragment<T extends keyof JSX.IntrinsicElements | 'fragment'>(as?: T): as is T & 'fragment' {
+	return as === 'fragment';
+}
 
 /* ----- nested detection (handles memo/forwardRef) ----- */
 const STREAMING_MARKER = Symbol.for('react-tree-stream/TreeStream');
@@ -69,17 +75,17 @@ function planSignature(plan: ExecutionUnit[]): string {
 	);
 }
 
-export function TreeStream({
-	as = 'div',
+export function TreeStream<T extends keyof JSX.IntrinsicElements | 'fragment' = 'div'>({
+	as,
 	children,
 	speed = 5,
 	interval = 50,
+	streamBy = 'word',
 	autoStart = true,
 	onComplete,
 	className = '',
 	...elementProps
-}: TreeStreamProps) {
-	const Element = as;
+}: TreeStreamProps<T>) {
 	const instanceIdRef = useRef<string>(newInstanceId());
 
 	/* Keep latest onComplete in a ref to avoid effect resubscribes */
@@ -100,10 +106,10 @@ export function TreeStream({
 
 	/* scheduling / run guards */
 	const runIdRef = useRef(0);
-	const timersRef = useRef<number[]>([]);
+	const timersRef = useRef<NodeJS.Timeout[]>([]);
 	const schedule = useCallback((fn: () => void, delay = 0) => {
 		const thisRun = runIdRef.current;
-		const t = window.setTimeout(() => {
+		const t = setTimeout(() => {
 			if (runIdRef.current === thisRun) fn();
 		}, delay);
 		timersRef.current.push(t);
@@ -140,10 +146,10 @@ export function TreeStream({
 		if (!unit) return;
 		switch (unit.type) {
 			case 'text_stream': {
-				const words = unit.content.split(/(\s+)/); // keep whitespace
+				const units = streamBy === 'character' ? unit.content.split('') : unit.content.split(/(\s+)/); // keep whitespace for words
 				const k = textKey(unitIndex);
 				activeTextKeyRef.current = k;
-				setCurrentTextWords(words);
+				setCurrentTextWords(units);
 				setCurrentWordIndex(0);
 				setIsStreamingText(true);
 				setRenderedContent((prev) =>
@@ -196,7 +202,7 @@ export function TreeStream({
 			schedule(() => executeUnit(next), 0);
 			return;
 		}
-		const t = window.setTimeout(() => {
+		const t = setTimeout(() => {
 			const step = Math.max(1, speed ?? 1);
 			const nextIndex = Math.min(currentWordIndex + step, currentTextWords.length);
 			const textContent = currentTextWords.slice(0, nextIndex).join('');
@@ -246,22 +252,25 @@ export function TreeStream({
 
 	// Memoise element creation
 	const element = useMemo(() => {
-		const incomingStyle = (elementProps as { style?: React.CSSProperties })?.style || {};
-		return (
-			<Element
-				{...elementProps}
-				className={className}
-				style={incomingStyle}
-				data-tree-stream
-				data-streaming={isStreamingText || isWaitingForNested}
-				data-complete={isComplete}
-			>
-				{renderedContent.map((item) => (
-					<React.Fragment key={item.key}>{item.content}</React.Fragment>
-				))}
-			</Element>
-		);
-	}, [Element, elementProps, className, isStreamingText, isWaitingForNested, isComplete, renderedContent]);
+		const children = renderedContent.map((item) => <React.Fragment key={item.key}>{item.content}</React.Fragment>);
+
+		if (isFragment(as)) {
+			return <React.Fragment>{children}</React.Fragment>;
+		}
+
+		// The type guard ensures `as` is not 'fragment' here.
+		const Element = (as || 'div') as keyof JSX.IntrinsicElements;
+		const props = {
+			...elementProps,
+			className,
+			style: (elementProps as { style?: React.CSSProperties })?.style,
+			'data-tree-stream': true,
+			'data-streaming': isStreamingText || isWaitingForNested,
+			'data-complete': isComplete,
+		};
+
+		return <Element {...props}>{children}</Element>;
+	}, [as, elementProps, className, isStreamingText, isWaitingForNested, isComplete, renderedContent]);
 
 	return element;
 }
