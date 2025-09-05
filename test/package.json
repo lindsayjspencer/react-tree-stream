@@ -6,7 +6,7 @@
 		"test": "tsc --noEmit && vitest run"
 	},
 	"dependencies": {
-		"react-tree-stream": "link:../package",
+		"react-tree-stream": "workspace:*",
 		"react": "^18.2.0",
 		"react-dom": "^18.2.0"
 	},
