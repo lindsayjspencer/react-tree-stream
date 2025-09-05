@@ -1,5 +1,11 @@
 # react-tree-stream
 
+## 1.0.0
+
+### Major Changes
+
+- c9eaa89: First version release
+
 ## 0.0.4
 
 ### Patch Changes
