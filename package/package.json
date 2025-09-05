@@ -1,6 +1,6 @@
 {
 	"name": "react-tree-stream",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"description": "Stream React trees recursively, LLM-style progressive rendering.",
 	"license": "MIT",
 	"author": "",
