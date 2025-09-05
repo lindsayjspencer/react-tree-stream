@@ -1,5 +1,11 @@
 # react-tree-stream
 
+## 0.0.4
+
+### Patch Changes
+
+- 4d935b3: Add readme
+
 ## 0.0.3
 
 ### Patch Changes
