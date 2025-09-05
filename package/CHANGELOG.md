@@ -1,5 +1,11 @@
 # react-tree-stream
 
+## 0.0.3
+
+### Patch Changes
+
+- 001bcdf: Added support for character by character streaming
+
 ## 0.0.2
 
 ### Patch Changes
