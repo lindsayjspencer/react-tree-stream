@@ -59,8 +59,8 @@
 		"url": "https://github.com/lindsayjspencer/react-tree-stream"
 	},
 	"scripts": {
-		"build": "tsup src/index.tsx --format cjs,esm --dts --sourcemap --clean",
-		"dev": "tsup src/index.tsx --format cjs,esm --dts --watch",
+		"build": "tsup",
+		"dev": "tsup --watch",
 		"prepublishOnly": "pnpm build"
 	},
 	"publishConfig": {

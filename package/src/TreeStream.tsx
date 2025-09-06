@@ -1,81 +1,168 @@
 'use client';
 
-import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import React, { useEffect, useMemo, useCallback, useRef, useId, useReducer } from 'react';
+import { STREAMING_MARKER } from './nested';
+import { buildPlan, planSignature, type ExecutionUnit } from './plan';
+import { useSequentialScheduler } from './useSequentialScheduler';
+import { initialStreamState, streamReducer } from './reducer';
 
-type ExecutionUnit =
-	| { type: 'text_stream'; content: string }
-	| { type: 'instant_render'; content: React.ReactElement }
-	| { type: 'nested_stream'; component: React.ReactElement };
+/**
+ * TreeStream
+ *
+ * A client-only React component that renders its children incrementally over time.
+ * It walks the provided React node tree into a linear execution plan of units:
+ *  - text units (streamed by word or character)
+ *  - instant units (regular React elements rendered immediately)
+ *  - nested stream units (child TreeStream elements, coordinated by onComplete)
+ *
+ * Contract (inputs/outputs):
+ *  - Props:
+ *    - as: optional polymorphic element type; use 'fragment' for no wrapper
+ *    - children: any renderable React nodes; fragments/arrays are flattened
+ *    - speed: number of tokens per tick (tokens are words or characters)
+ *    - interval: ms between ticks
+ *    - streamBy: 'word' | 'character' determines tokenization of text units
+ *    - autoStart: start streaming automatically when inputs/signature change
+ *    - onComplete: called after the final unit completes (including nested)
+ *  - DOM: adds data attributes for observability:
+ *    - data-tree-stream, data-streaming, data-complete
+ *  - SSR: client-only ('use client'); streaming occurs in the browser
+ *
+ * Notes:
+ *  - Nested TreeStream children have autoStart forced to true, and their
+ *    onComplete is composed so the parent resumes after the child completes.
+ *  - A stable "plan signature" is used to reset the stream only when structure
+ *    or text content changes; this limits unnecessary restarts.
+ */
 
-export type TreeStreamProps<T extends keyof JSX.IntrinsicElements | 'fragment' = 'div'> = {
-	as?: T;
-	children: React.ReactNode;
-	speed?: number; // units (words or chars) per tick
-	interval?: number; // ms per tick
+// ExecutionUnit is now imported from ./plan
+
+/**
+ * Props for TreeStream.
+ * - speed: tokens per tick (>= 1). Tokens are words or characters per streamBy.
+ * - interval: delay between ticks in ms.
+ * - streamBy: tokenization strategy for text nodes.
+ * - autoStart: if false, the component initializes idle until inputs change again or programmatically started in a future version.
+ */
+/**
+ * Core properties for the TreeStream component
+ */
+type OwnProps = {
+	/**
+	 * Number of tokens to display per tick (must be >= 1).
+	 * Tokens are either words or characters based on the `streamBy` prop.
+	 * @default 5
+	 */
+	speed?: number;
+	/**
+	 * Delay between ticks in milliseconds.
+	 * Controls the animation speed of the streaming effect.
+	 * @default 50
+	 */
+	interval?: number;
+	/**
+	 * Tokenization strategy for text nodes.
+	 * - 'word': Text is split and streamed word by word
+	 * - 'character': Text is split and streamed character by character
+	 * @default 'word'
+	 */
 	streamBy?: 'word' | 'character';
+	/**
+	 * Whether to automatically start streaming when the component mounts
+	 * or when inputs/signature change. If false, the component initializes
+	 * in an idle state.
+	 * @default true
+	 */
 	autoStart?: boolean;
+	/**
+	 * Callback invoked after all content (including nested TreeStream components)
+	 * has finished streaming.
+	 */
 	onComplete?: () => void;
-} & (T extends 'fragment'
-	? { className?: undefined }
-	: Omit<React.ComponentPropsWithoutRef<T & keyof JSX.IntrinsicElements>, 'as' | 'children'>);
+};
 
-/* ----- stable ids (no Date.now) ----- */
-let __seq = 0;
-const newInstanceId = () => `ts-${++__seq}`;
+type AsProp<E extends React.ElementType> = { as?: E };
+type PropsToOmit<E extends React.ElementType> = keyof (AsProp<E> & OwnProps);
+type PolymorphicProps<E extends React.ElementType> = AsProp<E> &
+	OwnProps &
+	Omit<React.ComponentPropsWithoutRef<E>, PropsToOmit<E>>;
+type FragmentPropsGuard<E extends React.ElementType> = E extends typeof React.Fragment
+	? { className?: never; style?: never }
+	: {};
 
-/* ----- type guard for fragment ----- */
-function isFragment<T extends keyof JSX.IntrinsicElements | 'fragment'>(as?: T): as is T & 'fragment' {
-	return as === 'fragment';
+/**
+ * Props for the TreeStream component with polymorphic support.
+ *
+ * @template E - The element type for the wrapper component
+ * @example
+ * ```tsx
+ * // Default div wrapper
+ * <TreeStream>Content</TreeStream>
+ *
+ * // Custom element wrapper
+ * <TreeStream as="section">Content</TreeStream>
+ *
+ * // No wrapper (fragment)
+ * <TreeStream as={React.Fragment}>Content</TreeStream>
+ * ```
+ */
+export type TreeStreamProps<E extends React.ElementType = 'div'> = PolymorphicProps<E> & FragmentPropsGuard<E>;
+
+// Stable instance id for keys (SSR-friendly and deterministic)
+// Prefer useId over custom counters for readability and testability
+
+// Helper to detect fragment usage
+function isFragmentElementType(as: React.ElementType | undefined): as is typeof React.Fragment {
+	return as === React.Fragment;
 }
 
-/* ----- nested detection (handles memo/forwardRef) ----- */
-const STREAMING_MARKER = Symbol.for('react-tree-stream/TreeStream');
-function isTreeStreamElement(el: React.ReactElement): boolean {
-	const t = el.type as unknown as {
-		[STREAMING_MARKER]?: boolean;
-		type?: { [STREAMING_MARKER]?: boolean };
-		render?: { [STREAMING_MARKER]?: boolean };
-		displayName?: string;
-	};
-	return Boolean(
-		t?.[STREAMING_MARKER] ||
-			t?.type?.[STREAMING_MARKER] || // React.memo
-			t?.render?.[STREAMING_MARKER] || // forwardRef
-			t?.displayName === 'TreeStream',
-	);
-}
+// buildPlan and planSignature are imported from ./plan
 
-/* ----- plan builder (recurse fragments/arrays) ----- */
-function buildPlan(node: React.ReactNode): ExecutionUnit[] {
-	if (node == null || node === false || node === true) return [];
-	if (typeof node === 'string') return node.trim() ? [{ type: 'text_stream', content: node }] : [];
-	if (typeof node === 'number') return [{ type: 'text_stream', content: String(node) }];
-	if (Array.isArray(node)) return node.flatMap(buildPlan);
-	if (React.isValidElement(node)) {
-		if (node.type === React.Fragment) return buildPlan(node.props?.children);
-		if (isTreeStreamElement(node)) return [{ type: 'nested_stream', component: node }];
-		return [{ type: 'instant_render', content: node }];
-	}
-	return [];
-}
-
-/* Create a stable signature that ignores element identity but captures structure. */
-function planSignature(plan: ExecutionUnit[]): string {
-	return JSON.stringify(
-		plan.map((u) => {
-			switch (u.type) {
-				case 'text_stream':
-					return ['T', u.content]; // include text so content changes re-run
-				case 'nested_stream':
-					return ['N']; // structure only
-				case 'instant_render':
-					return ['I']; // structure only
-			}
-		}),
-	);
-}
-
-export function TreeStream<T extends keyof JSX.IntrinsicElements | 'fragment' = 'div'>({
+/**
+ * TreeStream - A React component that renders content with a streaming animation effect.
+ *
+ * Renders children incrementally over time, creating a typewriter-like effect.
+ * Supports text streaming (by word or character), instant rendering of React elements,
+ * and nested TreeStream components with coordinated completion callbacks.
+ *
+ * @template E - The element type for the wrapper component (defaults to 'div')
+ * @param props - The component props
+ * @param props.as - Optional polymorphic element type. Use React.Fragment for no wrapper
+ * @param props.children - React nodes to stream. Fragments and arrays are flattened
+ * @param props.speed - Number of tokens to display per tick (default: 5)
+ * @param props.interval - Milliseconds between ticks (default: 50)
+ * @param props.streamBy - Tokenization strategy: 'word' or 'character' (default: 'word')
+ * @param props.autoStart - Start streaming automatically on mount/change (default: true)
+ * @param props.onComplete - Callback when streaming completes (including nested streams)
+ *
+ * @returns A React element that streams its content progressively
+ *
+ * @example
+ * ```tsx
+ * // Basic usage
+ * <TreeStream speed={10} interval={30}>
+ *   Hello world! This text will stream in.
+ * </TreeStream>
+ *
+ * // Character-by-character streaming
+ * <TreeStream streamBy="character" speed={1}>
+ *   Typing effect...
+ * </TreeStream>
+ *
+ * // With completion callback
+ * <TreeStream onComplete={() => console.log('Done!')}>
+ *   Content here
+ * </TreeStream>
+ *
+ * // Nested streaming components
+ * <TreeStream>
+ *   First part
+ *   <TreeStream>Nested content streams after parent</TreeStream>
+ *   Final part
+ * </TreeStream>
+ * ```
+ */
+export function TreeStream<E extends React.ElementType = 'div'>({
 	as,
 	children,
 	speed = 5,
@@ -83,90 +170,66 @@ export function TreeStream<T extends keyof JSX.IntrinsicElements | 'fragment' = 
 	streamBy = 'word',
 	autoStart = true,
 	onComplete,
-	className = '',
-	...elementProps
-}: TreeStreamProps<T>) {
-	const instanceIdRef = useRef<string>(newInstanceId());
+	...rest
+}: TreeStreamProps<E>) {
+	const instanceId = useId();
 
-	/* Keep latest onComplete in a ref to avoid effect resubscribes */
+	// Keep latest onComplete in a ref to avoid effect resubscribes
 	const onCompleteRef = useRef<(() => void) | undefined>(onComplete);
 	useEffect(() => {
 		onCompleteRef.current = onComplete;
 	}, [onComplete]);
 
-	/* Build plan & a stable signature */
-	const computedPlan = useMemo(() => buildPlan(children), [children]);
-	const signature = useMemo(() => planSignature(computedPlan), [computedPlan]);
+	// Build plan & a stable signature
+	const plan = useMemo(() => buildPlan(children), [children]);
+	const signature = useMemo(() => planSignature(plan), [plan]);
 
-	/* Store plan in a ref for the executor */
-	const planRef = useRef<ExecutionUnit[]>(computedPlan);
+	// Store latest plan in a ref for the executor (avoids callback deps churn)
+	const latestPlanRef = useRef<ExecutionUnit[]>(plan);
 	useEffect(() => {
-		planRef.current = computedPlan;
-	}, [computedPlan]);
+		latestPlanRef.current = plan;
+	}, [plan]);
 
-	/* scheduling / run guards */
-	const runIdRef = useRef(0);
-	const timersRef = useRef<NodeJS.Timeout[]>([]);
-	const schedule = useCallback((fn: () => void, delay = 0) => {
-		const thisRun = runIdRef.current;
-		const t = setTimeout(() => {
-			if (runIdRef.current === thisRun) fn();
-		}, delay);
-		timersRef.current.push(t);
-	}, []);
+	// Centralized scheduler for timers and run guards
+	const { schedule: scheduleNext, cancelAll, nextRunToken } = useSequentialScheduler();
 
-	/* render state */
-	const [currentUnit, setCurrentUnit] = useState(0);
-	const [isWaitingForNested, setIsWaitingForNested] = useState(false);
-	const [renderedContent, setRenderedContent] = useState<Array<{ key: string; content: React.ReactNode }>>([]);
+	// Internal state managed via reducer
+	const [state, dispatch] = useReducer(streamReducer, initialStreamState);
+	const {
+		unitIndex: currentUnit,
+		waitingNested: isWaitingForNested,
+		rendered: renderedMap,
+		text,
+		complete: isComplete,
+	} = state;
+	const activeTextUnitRef = useRef<number | null>(text.activeUnit);
 
-	/* text streaming */
-	const [currentTextWords, setCurrentTextWords] = useState<string[]>([]);
-	const [currentWordIndex, setCurrentWordIndex] = useState(0);
-	const [isStreamingText, setIsStreamingText] = useState(false);
-	const [isComplete, setIsComplete] = useState(false);
-
-	/* only patch the active streamed node */
-	const activeTextKeyRef = useRef<string | null>(null);
-
-	/* stable keys */
-	const textKey = (u: number) => `${instanceIdRef.current}:u${u}:t`;
-	const instKey = (u: number) => `${instanceIdRef.current}:u${u}:i`;
-	const nestKey = (u: number) => `${instanceIdRef.current}:u${u}:n`;
-
-	/* executor (reads plan from ref; no deps) */
-	const executeUnit = useCallback((unitIndex: number) => {
-		const plan = planRef.current;
+	// Executor (reads latest plan from ref; stable callback)
+	const runUnit = useCallback((unitIndex: number) => {
+		const currentPlan = latestPlanRef.current;
 		if (unitIndex >= plan.length) {
-			setIsComplete(true);
+			dispatch({ type: 'COMPLETE' });
 			onCompleteRef.current?.();
 			return;
 		}
-		const unit = plan[unitIndex];
+		const unit = currentPlan[unitIndex];
 		if (!unit) return;
 		switch (unit.type) {
 			case 'text_stream': {
-				const units = streamBy === 'character' ? unit.content.split('') : unit.content.split(/(\s+)/); // keep whitespace for words
-				const k = textKey(unitIndex);
-				activeTextKeyRef.current = k;
-				setCurrentTextWords(units);
-				setCurrentWordIndex(0);
-				setIsStreamingText(true);
-				setRenderedContent((prev) =>
-					prev.some((p) => p.key === k) ? prev : [...prev, { key: k, content: '' }],
-				);
+				const units = streamBy === 'character' ? unit.content.split('') : unit.content.split(/(\s+)/);
+				activeTextUnitRef.current = unitIndex;
+				dispatch({ type: 'BEGIN_TEXT', unitIndex, tokens: units });
 				break;
 			}
 			case 'instant_render': {
-				setRenderedContent((prev) => [...prev, { key: instKey(unitIndex), content: unit.content }]);
+				dispatch({ type: 'INSTANT_RENDER', unitIndex, node: unit.content });
 				const next = unitIndex + 1;
-				setCurrentUnit(next);
-				schedule(() => executeUnit(next), 0);
+				dispatch({ type: 'ADVANCE' });
+				scheduleNext(() => runUnit(next), 0);
 				break;
 			}
 			case 'nested_stream': {
-				setIsWaitingForNested(true);
-				/* compose child's onComplete with parent advance */
+				// Compose child's onComplete with parent advance
 				const child = unit.component;
 				const childExisting = (child.props as { onComplete?: () => void })?.onComplete as
 					| (() => void)
@@ -175,10 +238,10 @@ export function TreeStream<T extends keyof JSX.IntrinsicElements | 'fragment' = 
 					try {
 						childExisting?.();
 					} finally {
-						setIsWaitingForNested(false);
+						dispatch({ type: 'NESTED_DONE' });
 						const next = unitIndex + 1;
-						setCurrentUnit(next);
-						schedule(() => executeUnit(next), 0);
+						dispatch({ type: 'ADVANCE' });
+						scheduleNext(() => runUnit(next), 0);
 					}
 				};
 				const nestedWithCb = React.cloneElement(child, {
@@ -186,91 +249,77 @@ export function TreeStream<T extends keyof JSX.IntrinsicElements | 'fragment' = 
 					autoStart: true,
 					onComplete: composed,
 				});
-				setRenderedContent((prev) => [...prev, { key: nestKey(unitIndex), content: nestedWithCb }]);
+				dispatch({ type: 'NESTED_START', unitIndex, node: nestedWithCb });
 				break; // wait for nested to call back
 			}
 		}
 	}, []);
 
-	/* text tick */
+	// Text tick
 	useEffect(() => {
-		if (!isStreamingText || currentTextWords.length === 0) return;
-		if (currentWordIndex >= currentTextWords.length) {
-			setIsStreamingText(false);
+		if (!text.streaming || text.tokens.length === 0) return;
+		if (text.index >= text.tokens.length) {
+			dispatch({ type: 'END_TEXT' });
 			const next = currentUnit + 1;
-			setCurrentUnit(next);
-			schedule(() => executeUnit(next), 0);
+			dispatch({ type: 'ADVANCE' });
+			scheduleNext(() => runUnit(next), 0);
 			return;
 		}
-		const t = setTimeout(() => {
+		scheduleNext(() => {
 			const step = Math.max(1, speed ?? 1);
-			const nextIndex = Math.min(currentWordIndex + step, currentTextWords.length);
-			const textContent = currentTextWords.slice(0, nextIndex).join('');
-			const k = activeTextKeyRef.current;
-			setRenderedContent((prev) => {
-				if (!k) return prev;
-				const idx = prev.findIndex((p) => p.key === k);
-				if (idx === -1) return [...prev, { key: k, content: textContent }];
-				const clone = prev.slice();
-				clone[idx] = { key: k, content: textContent };
-				return clone;
-			});
-			setCurrentWordIndex(nextIndex);
+			const nextIndex = Math.min(text.index + step, text.tokens.length);
+			const textContent = text.tokens.slice(0, nextIndex).join('');
+			dispatch({ type: 'TEXT_TICK', nextIndex, content: textContent });
 		}, Math.max(0, interval ?? 0));
-		timersRef.current.push(t);
-		return () => clearTimeout(t);
-	}, [isStreamingText, currentTextWords, currentWordIndex, speed, interval, currentUnit, executeUnit, schedule]);
+	}, [text.streaming, text.tokens, text.index, speed, interval, currentUnit, runUnit, scheduleNext]);
 
-	/* reset ONLY when the signature or autoStart change */
+	// Reset ONLY when the signature or autoStart change
 	useEffect(() => {
-		runIdRef.current += 1;
-		timersRef.current.forEach(clearTimeout);
-		timersRef.current = [];
-		activeTextKeyRef.current = null;
+		nextRunToken();
+		activeTextUnitRef.current = null;
+		dispatch({ type: 'RESET' });
 
-		setCurrentUnit(0);
-		setIsWaitingForNested(false);
-		setRenderedContent([]);
-		setCurrentTextWords([]);
-		setCurrentWordIndex(0);
-		setIsStreamingText(false);
-		setIsComplete(false);
-
-		const planLen = planRef.current.length;
+		const planLen = latestPlanRef.current.length;
 		if (planLen === 0) {
-			setIsComplete(true);
+			dispatch({ type: 'COMPLETE' });
 			onCompleteRef.current?.();
 			return;
 		}
-		if (autoStart) executeUnit(0);
+		if (autoStart) runUnit(0);
 
 		return () => {
-			timersRef.current.forEach(clearTimeout);
-			timersRef.current = [];
+			cancelAll();
 		};
-	}, [signature, autoStart, executeUnit]);
+	}, [signature, autoStart, runUnit, nextRunToken, cancelAll]);
 
 	// Memoise element creation
 	const element = useMemo(() => {
-		const children = renderedContent.map((item) => <React.Fragment key={item.key}>{item.content}</React.Fragment>);
+		const children = Array.from(renderedMap.entries()).map(([unitIndex, content]) => (
+			<React.Fragment key={`${instanceId}:u${unitIndex}`}>{content}</React.Fragment>
+		));
 
-		if (isFragment(as)) {
+		if (isFragmentElementType(as)) {
 			return <React.Fragment>{children}</React.Fragment>;
 		}
 
-		// The type guard ensures `as` is not 'fragment' here.
-		const Element = (as || 'div') as keyof JSX.IntrinsicElements;
+		// The type guard ensures `as` is not Fragment here.
+		const Element = (as || 'div') as React.ElementType;
+		const { className, style, ...elementProps } = rest as {
+			className?: string;
+			style?: React.CSSProperties;
+			[key: string]: unknown;
+		};
 		const props = {
 			...elementProps,
 			className,
-			style: (elementProps as { style?: React.CSSProperties })?.style,
+			style,
 			'data-tree-stream': true,
-			'data-streaming': isStreamingText || isWaitingForNested,
+			'data-streaming': text.streaming || isWaitingForNested,
 			'data-complete': isComplete,
 		};
 
 		return <Element {...props}>{children}</Element>;
-	}, [as, elementProps, className, isStreamingText, isWaitingForNested, isComplete, renderedContent]);
+	}, [as, rest, text.streaming, isWaitingForNested, isComplete, renderedMap, instanceId]);
 
 	return element;
 }

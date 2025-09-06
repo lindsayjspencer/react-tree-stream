@@ -25,7 +25,6 @@ describe('TreeStream', () => {
 	});
 	it('should render a div wrapper by default', async () => {
 		const { container } = render(<TreeStream>Hello World</TreeStream>);
-
 		act(() => {
 			vi.runAllTimers();
 		});
@@ -47,9 +46,9 @@ describe('TreeStream', () => {
 		expect(container.textContent).toContain('Hello World');
 	});
 
-	it('should render as a React.Fragment when as="fragment"', async () => {
+	it('should render as a React.Fragment when as={React.Fragment}', async () => {
 		const { container } = render(
-			<TreeStream as="fragment">
+			<TreeStream as={React.Fragment}>
 				<span>Fragment Content</span>
 			</TreeStream>,
 		);
@@ -69,10 +68,10 @@ describe('TreeStream', () => {
 		expect(container.firstChild?.nodeName).toBe('SPAN');
 	});
 
-	it('should not apply DOM-specific attributes like className when as="fragment"', () => {
+	it('should not apply DOM-specific attributes like className when as={React.Fragment}', () => {
 		const { container } = render(
 			// @ts-expect-error - Testing that className is disallowed and not applied
-			<TreeStream as="fragment" className="should-not-exist">
+			<TreeStream as={React.Fragment} className="should-not-exist">
 				Content
 			</TreeStream>,
 		);
@@ -141,5 +140,33 @@ describe('TreeStream', () => {
 			vi.advanceTimersByTime(10);
 		});
 		expect(container.textContent).toBe('Hi');
+	});
+
+	it('should render using a custom component as wrapper and forward props', async () => {
+		const Custom = ({ children, ...rest }: React.PropsWithChildren<React.ComponentPropsWithoutRef<'section'>>) => (
+			<section data-custom="yes" {...rest}>
+				{children}
+			</section>
+		);
+
+		const { container } = render(
+			<TreeStream as={Custom} className="host" speed={50} interval={1}>
+				Custom wrapper
+			</TreeStream>,
+		);
+
+		act(() => {
+			vi.runAllTimers();
+		});
+		// Some state flips happen on a zero-delay tick; flush it to observe data-complete=true
+		await act(async () => {
+			vi.advanceTimersByTime(0);
+		});
+
+		const el = container.querySelector('section[data-tree-stream]') as HTMLElement | null;
+		expect(el).toBeTruthy();
+		expect(el!.dataset.custom).toBe('yes');
+		expect(el!.className).toContain('host');
+		expect(el!.dataset.complete).toBe('true');
 	});
 });

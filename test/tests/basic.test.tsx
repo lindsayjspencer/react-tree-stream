@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import React, { memo, forwardRef } from 'react';
-import { TreeStream } from 'react-tree-stream';
+import { TreeStream, type TreeStreamProps } from 'react-tree-stream';
 import { createRoot } from 'react-dom/client';
 import { act } from 'react';
 
@@ -208,7 +208,9 @@ describe('TreeStream', () => {
 
 	it('detects nested streams through memo and forwardRef wrappers', async () => {
 		const MemoTreeStream = memo(TreeStream);
-		const FwdTreeStream = forwardRef<HTMLDivElement, React.ComponentProps<typeof TreeStream>>(TreeStream);
+		const FwdTreeStream = forwardRef<HTMLDivElement, TreeStreamProps<'div'>>(
+			TreeStream as unknown as React.ForwardRefRenderFunction<HTMLDivElement, TreeStreamProps<'div'>>,
+		);
 
 		const { container } = render(
 			<TreeStream speed={50} interval={1}>
