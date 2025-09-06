@@ -1,5 +1,11 @@
 # react-tree-stream
 
+## 1.1.0
+
+### Minor Changes
+
+- f0c95c2: Proper element types
+
 ## 1.0.0
 
 ### Major Changes

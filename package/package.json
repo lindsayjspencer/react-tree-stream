@@ -1,6 +1,6 @@
 {
 	"name": "react-tree-stream",
-	"version": "1.0.0",
+	"version": "1.1.0",
 	"description": "Stream React trees recursively, LLM-style progressive rendering.",
 	"keywords": [
 		"react",
