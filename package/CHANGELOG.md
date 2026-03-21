@@ -1,5 +1,11 @@
 # react-tree-stream
 
+## 1.2.0
+
+### Minor Changes
+
+- ab30243: Treat components as tokens
+
 ## 1.1.0
 
 ### Minor Changes
