@@ -12,14 +12,14 @@ import { initialStreamState, streamReducer } from './reducer';
  * A client-only React component that renders its children incrementally over time.
  * It walks the provided React node tree into a linear execution plan of units:
  *  - text units (streamed by word or character)
- *  - instant units (regular React elements rendered immediately)
+ *  - element units (regular React elements rendered as a single sequenced step)
  *  - nested stream units (child TreeStream elements, coordinated by onComplete)
  *
  * Contract (inputs/outputs):
  *  - Props:
  *    - as: optional polymorphic element type; use 'fragment' for no wrapper
  *    - children: any renderable React nodes; fragments/arrays are flattened
- *    - speed: number of tokens per tick (tokens are words or characters)
+ *    - speed: number of units per tick (words, characters, or element units)
  *    - interval: ms between ticks
  *    - streamBy: 'word' | 'character' determines tokenization of text units
  *    - autoStart: start streaming automatically when inputs/signature change
@@ -29,6 +29,8 @@ import { initialStreamState, streamReducer } from './reducer';
  *  - SSR: client-only ('use client'); streaming occurs in the browser
  *
  * Notes:
+ *  - Plain React elements are atomic units in the parent stream: the element
+ *    appears when its turn is reached, but its internals are not tokenized.
  *  - Nested TreeStream children have autoStart forced to true, and their
  *    onComplete is composed so the parent resumes after the child completes.
  *  - A stable "plan signature" is used to reset the stream only when structure
@@ -122,15 +124,15 @@ function isFragmentElementType(as: React.ElementType | undefined): as is typeof 
  * TreeStream - A React component that renders content with a streaming animation effect.
  *
  * Renders children incrementally over time, creating a typewriter-like effect.
- * Supports text streaming (by word or character), instant rendering of React elements,
- * and nested TreeStream components with coordinated completion callbacks.
+ * Supports text streaming (by word or character), sequencing plain React elements
+ * as atomic units, and nested TreeStream components with coordinated completion callbacks.
  *
  * @template E - The element type for the wrapper component (defaults to 'div')
  * @param props - The component props
  * @param props.as - Optional polymorphic element type. Use React.Fragment for no wrapper
  * @param props.children - React nodes to stream. Fragments and arrays are flattened
- * @param props.speed - Number of tokens to display per tick (default: 5)
- * @param props.interval - Milliseconds between ticks (default: 50)
+ * @param props.speed - Number of units to advance per tick (default: 5)
+ * @param props.interval - Minimum delay between ticks (default: 50)
  * @param props.streamBy - Tokenization strategy: 'word' or 'character' (default: 'word')
  * @param props.autoStart - Start streaming automatically on mount/change (default: true)
  * @param props.onComplete - Callback when streaming completes (including nested streams)
@@ -173,6 +175,8 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 	...rest
 }: TreeStreamProps<E>) {
 	const instanceId = useId();
+	const tickStep = Math.max(1, speed ?? 1);
+	const tickDelay = Math.max(0, interval ?? 0);
 
 	// Keep latest onComplete in a ref to avoid effect resubscribes
 	const onCompleteRef = useRef<(() => void) | undefined>(onComplete);
@@ -205,55 +209,101 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 	const activeTextUnitRef = useRef<number | null>(text.activeUnit);
 
 	// Executor (reads latest plan from ref; stable callback)
-	const runUnit = useCallback((unitIndex: number) => {
-		const currentPlan = latestPlanRef.current;
-		if (unitIndex >= plan.length) {
-			dispatch({ type: 'COMPLETE' });
-			onCompleteRef.current?.();
-			return;
-		}
-		const unit = currentPlan[unitIndex];
-		if (!unit) return;
-		switch (unit.type) {
-			case 'text_stream': {
-				const units = streamBy === 'character' ? unit.content.split('') : unit.content.split(/(\s+)/);
-				activeTextUnitRef.current = unitIndex;
-				dispatch({ type: 'BEGIN_TEXT', unitIndex, tokens: units });
-				break;
+	const runUnit = useCallback(
+		(unitIndex: number, componentBudget = tickStep, hasConsumedComponent = false) => {
+			const currentPlan = latestPlanRef.current;
+			if (unitIndex >= currentPlan.length) {
+				dispatch({ type: 'COMPLETE' });
+				onCompleteRef.current?.();
+				return;
 			}
-			case 'instant_render': {
-				dispatch({ type: 'INSTANT_RENDER', unitIndex, node: unit.content });
-				const next = unitIndex + 1;
-				dispatch({ type: 'ADVANCE' });
-				scheduleNext(() => runUnit(next), 0);
-				break;
-			}
-			case 'nested_stream': {
-				// Compose child's onComplete with parent advance
-				const child = unit.component;
-				const childExisting = (child.props as { onComplete?: () => void })?.onComplete as
-					| (() => void)
-					| undefined;
-				const composed = () => {
-					try {
-						childExisting?.();
-					} finally {
-						dispatch({ type: 'NESTED_DONE' });
-						const next = unitIndex + 1;
-						dispatch({ type: 'ADVANCE' });
-						scheduleNext(() => runUnit(next), 0);
+
+			const completeStream = () => {
+				dispatch({ type: 'COMPLETE' });
+				onCompleteRef.current?.();
+			};
+			let nextUnitIndex = unitIndex;
+			let remainingBudget = componentBudget;
+			let consumedComponentThisTick = hasConsumedComponent;
+
+			while (nextUnitIndex < currentPlan.length) {
+				const unit = currentPlan[nextUnitIndex];
+				if (!unit) return;
+
+				switch (unit.type) {
+					case 'text_stream': {
+						if (consumedComponentThisTick) {
+							scheduleNext(() => runUnit(nextUnitIndex), tickDelay);
+							return;
+						}
+
+						const units = streamBy === 'character' ? unit.content.split('') : unit.content.split(/(\s+)/);
+						activeTextUnitRef.current = nextUnitIndex;
+						dispatch({ type: 'BEGIN_TEXT', unitIndex: nextUnitIndex, tokens: units });
+						return;
 					}
-				};
-				const nestedWithCb = React.cloneElement(child, {
-					...child.props,
-					autoStart: true,
-					onComplete: composed,
-				});
-				dispatch({ type: 'NESTED_START', unitIndex, node: nestedWithCb });
-				break; // wait for nested to call back
+					case 'instant_render': {
+						dispatch({ type: 'INSTANT_RENDER', unitIndex: nextUnitIndex, node: unit.content });
+						dispatch({ type: 'ADVANCE' });
+						nextUnitIndex += 1;
+						remainingBudget -= 1;
+						consumedComponentThisTick = true;
+
+						if (remainingBudget > 0) {
+							continue;
+						}
+
+						if (nextUnitIndex >= currentPlan.length) {
+							completeStream();
+							return;
+						}
+
+						scheduleNext(() => runUnit(nextUnitIndex), tickDelay);
+						return;
+					}
+					case 'nested_stream': {
+						// Compose child's onComplete with parent advance
+						const child = unit.component;
+						const childExisting = (child.props as { onComplete?: () => void })?.onComplete as
+							| (() => void)
+							| undefined;
+						const followingUnitIndex = nextUnitIndex + 1;
+						const remainingBudgetAfterChild = remainingBudget - 1;
+						const composed = () => {
+							try {
+								childExisting?.();
+							} finally {
+								dispatch({ type: 'NESTED_DONE' });
+								dispatch({ type: 'ADVANCE' });
+
+								if (followingUnitIndex >= latestPlanRef.current.length) {
+									completeStream();
+									return;
+								}
+
+								if (remainingBudgetAfterChild > 0) {
+									runUnit(followingUnitIndex, remainingBudgetAfterChild, true);
+									return;
+								}
+
+								scheduleNext(() => runUnit(followingUnitIndex), tickDelay);
+							}
+						};
+						const nestedWithCb = React.cloneElement(child, {
+							...child.props,
+							autoStart: true,
+							onComplete: composed,
+						});
+						dispatch({ type: 'NESTED_START', unitIndex: nextUnitIndex, node: nestedWithCb });
+						return; // wait for nested to call back
+					}
+				}
 			}
-		}
-	}, []);
+
+			completeStream();
+		},
+		[scheduleNext, streamBy, tickDelay, tickStep],
+	);
 
 	// Text tick
 	useEffect(() => {
@@ -262,16 +312,22 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 			dispatch({ type: 'END_TEXT' });
 			const next = currentUnit + 1;
 			dispatch({ type: 'ADVANCE' });
-			scheduleNext(() => runUnit(next), 0);
+
+			if (next >= latestPlanRef.current.length) {
+				dispatch({ type: 'COMPLETE' });
+				onCompleteRef.current?.();
+				return;
+			}
+
+			scheduleNext(() => runUnit(next), tickDelay);
 			return;
 		}
 		scheduleNext(() => {
-			const step = Math.max(1, speed ?? 1);
-			const nextIndex = Math.min(text.index + step, text.tokens.length);
+			const nextIndex = Math.min(text.index + tickStep, text.tokens.length);
 			const textContent = text.tokens.slice(0, nextIndex).join('');
 			dispatch({ type: 'TEXT_TICK', nextIndex, content: textContent });
-		}, Math.max(0, interval ?? 0));
-	}, [text.streaming, text.tokens, text.index, speed, interval, currentUnit, runUnit, scheduleNext]);
+		}, tickDelay);
+	}, [text.streaming, text.tokens, text.index, tickStep, tickDelay, currentUnit, runUnit, scheduleNext]);
 
 	// Reset ONLY when the signature or autoStart change
 	useEffect(() => {

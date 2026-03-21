@@ -39,6 +39,19 @@ describe('plan utilities', () => {
 		expect(types(plan)).toEqual(['text_stream', 'nested_stream', 'nested_stream', 'nested_stream', 'text_stream']);
 	});
 
+	it('treats plain React elements as atomic instant-render units', () => {
+		const plan = buildPlan(
+			<>
+				<div>
+					<span>Alpha</span>
+					<span>Beta</span>
+				</div>
+				{'Tail'}
+			</>,
+		);
+		expect(types(plan)).toEqual(['instant_render', 'text_stream']);
+	});
+
 	it('produces a stable signature by structure and text', () => {
 		const p1 = buildPlan(['A', <span key="1">X</span>, 'B']);
 		const p2 = buildPlan(['A', <div key="2">Y</div>, 'B']);

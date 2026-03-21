@@ -2,14 +2,14 @@
 
 [![npm version](https://badge.fury.io/js/react-tree-stream.svg)](https://badge.fury.io/js/react-tree-stream)
 
-A flexible React component for creating "streaming" or "typewriter" effects on your content. It intelligently renders text, components, and even nested streams sequentially.
+A flexible React component for creating "streaming" or "typewriter" effects on your content. It walks your React tree sequentially, streaming text over time and treating elements as atomic units in the flow.
 
 ## Features
 
--   **Text Streaming**: Renders text content word-by-word, like a typewriter.
--   **Component Rendering**: Instantly renders any non-text React components.
+-   **Text Streaming**: Renders text content word-by-word or character-by-character.
+-   **Element Sequencing**: Plain React elements count as single units in the stream.
 -   **Nested Streams**: Supports nesting `TreeStream` components, waiting for each to complete before continuing.
--   **Customizable**: Control the streaming speed and the underlying HTML element.
+-   **Customizable**: Control streaming speed, timing, and the underlying HTML element.
 -   **Callbacks**: `onComplete` event fires when the entire stream is finished.
 -   **Dynamic Content**: Automatically restarts the stream if its children change.
 -   **Styling Hooks**: Provides `data-streaming` and `data-complete` attributes for easy CSS styling.
@@ -44,7 +44,7 @@ function App() {
 
 ### Mixed Content
 
-`TreeStream` can handle a mix of text and React components. Text is streamed, while components are rendered instantly.
+`TreeStream` can handle a mix of text and React components. Text is tokenized and streamed over time, while plain React elements appear as atomic units when their turn is reached.
 
 ```tsx
 import { TreeStream } from 'react-tree-stream';
@@ -55,7 +55,7 @@ const MyComponent = () => (
 
 function App() {
   return (
-    <TreeStream>
+    <TreeStream speed={1} interval={80}>
       Here is some text.
       <MyComponent />
       And here is some more text that will appear after the component.
@@ -64,9 +64,15 @@ function App() {
 }
 ```
 
+In this example:
+
+- `Here is some text.` streams according to `streamBy`
+- `<MyComponent />` appears as one sequenced unit
+- the trailing text resumes after that element
+
 ### Nested Streams
 
-You can nest `TreeStream` components. The parent stream will pause and wait for the nested stream to complete before it continues.
+You can nest `TreeStream` components. A nested `TreeStream` is one unit in the parent flow, but it can stream its own contents internally. The parent stream pauses and waits for the nested stream to complete before it continues.
 
 ```tsx
 import { TreeStream } from 'react-tree-stream';
@@ -101,6 +107,37 @@ function App() {
 }
 ```
 
+## Mental Model
+
+`TreeStream` turns its direct children into a linear execution plan:
+
+- Plain text becomes streamed text tokens
+- Plain React elements become one atomic sequenced unit
+- Nested `TreeStream` elements become one sequenced unit that may stream internally
+
+This means you control grouping through normal React structure:
+
+- Want several things to appear together: wrap them in a single non-`TreeStream` element
+- Want sibling elements to appear one-by-one: render them as siblings
+- Want an element's own contents to stream: render that subtree as `TreeStream`
+
+Example:
+
+```tsx
+<TreeStream speed={1} interval={50}>
+  <a>Some link</a>
+  <a>Another link</a>
+  <TreeStream as="strong">Emphasized text</TreeStream>
+  And then some trailing text
+</TreeStream>
+```
+
+With this setup:
+
+- each `<a>` counts as one unit in the parent stream
+- `<TreeStream as="strong">` counts as one parent unit, but streams inside the `<strong>`
+- the trailing text streams after those units are reached
+
 ## Polymorphic `as` prop
 
 TreeStream is polymorphic: you can render it as any element or component using `as?: React.ElementType`.
@@ -133,8 +170,8 @@ The component accepts the following props:
 | ------------ | ---------------------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
 | `as`         | `React.ElementType`                | `'div'` | The element or component to render as the root; supports intrinsic tags, custom components, or `React.Fragment`. |
 | `children`   | `React.ReactNode`                  |         | The content to be streamed.                                                                             |
-| `speed`      | `number`                           | `5`     | The number of units (words, characters, or components) to render per tick.                                                                 |
-| `interval`   | `number`                           | `50`    | The delay in milliseconds between each rendering tick.                                                  |
+| `speed`      | `number`                           | `5`     | The number of units to advance per tick. Units are words, characters, plain elements, or nested `TreeStream` boundaries. |
+| `interval`   | `number`                           | `50`    | The delay in milliseconds between rendering ticks. |
 | `autoStart`  | `boolean`                          | `true`  | If `true`, the stream starts automatically on mount. If `false`, it waits for `autoStart` to become `true`. |
 | `onComplete` | `() => void`                       |         | A callback function that is invoked when the entire stream has finished rendering.                      |
 | `streamBy`   | `'word' \| 'character'`           | `'word'`| Determines the granularity of the streaming. Use `'word'` for word-by-word streaming or `'character'` for character-by-character streaming. |

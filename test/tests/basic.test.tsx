@@ -107,11 +107,12 @@ describe('TreeStream', () => {
 		expect(host.dataset.complete).toBe('true');
 	});
 
-	it('renders non-streamed elements instantly', async () => {
+	it('renders plain sibling elements as sequential units', async () => {
 		const { container } = render(
-			<TreeStream interval={1000}>
-				<strong>Bold</strong>
-				and text
+			<TreeStream interval={50} speed={1}>
+				<a href="#one">One</a>
+				<a href="#two">Two</a>
+				<a href="#three">Three</a>
 			</TreeStream>,
 		);
 
@@ -119,13 +120,46 @@ describe('TreeStream', () => {
 		await act(async () => {
 			vi.advanceTimersByTime(0);
 		});
-		expect(host.innerHTML).toContain('<strong>Bold</strong>');
+		expect(compact(host.textContent)).toBe('One');
+
 		await act(async () => {
-			vi.advanceTimersByTime(5000);
+			vi.advanceTimersByTime(50);
+		});
+		expect(compact(host.textContent)).toBe('OneTwo');
+
+		await act(async () => {
+			vi.advanceTimersByTime(50);
+		});
+		expect(compact(host.textContent)).toBe('OneTwoThree');
+		expect(host.dataset.complete).toBe('true');
+	});
+
+	it('treats plain wrapper elements as atomic units', async () => {
+		const { container } = render(
+			<TreeStream interval={50} speed={1}>
+				<div style={{ display: 'contents' }}>
+					<a href="#one">One</a>
+					<a href="#two">Two</a>
+				</div>
+				{'After links'}
+			</TreeStream>,
+		);
+
+		const host = container.querySelector('[data-tree-stream]') as HTMLElement;
+		await act(async () => {
 			vi.advanceTimersByTime(0);
 		});
-		expect(compact(host.textContent)).toContain('Bold');
-		expect(compact(host.textContent)).toContain('and text');
+		expect(compact(host.textContent)).toBe('OneTwo');
+
+		await act(async () => {
+			vi.advanceTimersByTime(50);
+		});
+		expect(compact(host.textContent)).toBe('OneTwo');
+
+		await act(async () => {
+			vi.advanceTimersByTime(50);
+		});
+		expect(compact(host.textContent)).toBe('OneTwoAfter');
 	});
 
 	it('supports nested streams and waits for child completion', async () => {
@@ -142,6 +176,36 @@ describe('TreeStream', () => {
 		const host = container.querySelector('[data-tree-stream]') as HTMLElement;
 		await runUntilComplete(host, 5000, 10);
 		expect(compact(host.textContent)).toBe('Parent start Child text Parent end');
+		expect(host.dataset.complete).toBe('true');
+	});
+
+	it('sequences sibling nested streams that contain only plain elements', async () => {
+		const { container } = render(
+			<TreeStream interval={50} speed={1}>
+				<TreeStream as="span">
+					<span>Alpha</span>
+				</TreeStream>
+				<TreeStream as="span">
+					<span>Beta</span>
+				</TreeStream>
+			</TreeStream>,
+		);
+
+		const host = container.querySelector('[data-tree-stream]') as HTMLElement;
+		await act(async () => {
+			vi.advanceTimersByTime(0);
+		});
+		expect(compact(host.textContent)).toBe('Alpha');
+
+		await act(async () => {
+			vi.advanceTimersByTime(49);
+		});
+		expect(compact(host.textContent)).toBe('Alpha');
+
+		await act(async () => {
+			vi.advanceTimersByTime(1);
+		});
+		expect(compact(host.textContent)).toBe('AlphaBeta');
 		expect(host.dataset.complete).toBe('true');
 	});
 

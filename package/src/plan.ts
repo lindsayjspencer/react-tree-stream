@@ -4,7 +4,7 @@ import { isTreeStreamElement } from './nested';
 /**
  * Execution units produced from children to drive the streaming executor.
  * - text_stream: a text node that will be tokenized and streamed
- * - instant_render: any non-stream Tree element rendered immediately
+ * - instant_render: any non-stream Tree element rendered as one sequenced unit
  * - nested_stream: a nested TreeStream element coordinated by onComplete
  */
 export type ExecutionUnit =
@@ -27,7 +27,8 @@ export type ExecutionUnit =
  * - Strings/numbers become text stream units (empty strings are skipped)
  * - Fragments/arrays are flattened recursively
  * - Elements marked as TreeStream become nested stream units
- * - All other elements are instant render units
+ * - All other elements are instant render units and count as a single step
+ *   in the parent stream
  *
  * Notes/edge cases:
  * - null/undefined/boolean nodes are ignored
