@@ -10,6 +10,7 @@ A flexible React component for creating "streaming" or "typewriter" effects on y
 -   **Element Sequencing**: Plain React elements count as single units in the stream.
 -   **Nested Streams**: Supports nesting `TreeStream` components, waiting for each to complete before continuing.
 -   **Customizable**: Control streaming speed, timing, and the underlying HTML element.
+-   **Observability**: Subscribe to run and unit lifecycle callbacks for diagnostics or orchestration.
 -   **Callbacks**: `onComplete` event fires when the entire stream is finished.
 -   **Dynamic Content**: Automatically restarts the stream if its children change.
 -   **Styling Hooks**: Provides `data-streaming` and `data-complete` attributes for easy CSS styling.
@@ -173,9 +174,14 @@ The component accepts the following props:
 | `speed`      | `number`                           | `5`     | The number of units to advance per tick. Units are words, characters, plain elements, or nested `TreeStream` boundaries. |
 | `interval`   | `number`                           | `50`    | The delay in milliseconds between rendering ticks. |
 | `autoStart`  | `boolean`                          | `true`  | If `true`, the stream starts automatically on mount. If `false`, it waits for `autoStart` to become `true`. |
+| `onStart`    | `() => void`                       |         | Called when a new stream run starts. |
+| `onUnitStart`| `(event) => void`                  |         | Called when a unit begins processing. |
+| `onUnitComplete` | `(event) => void`              |         | Called when a unit completes processing. |
 | `onComplete` | `() => void`                       |         | A callback function that is invoked when the entire stream has finished rendering.                      |
 | `streamBy`   | `'word' \| 'character'`           | `'word'`| Determines the granularity of the streaming. Use `'word'` for word-by-word streaming or `'character'` for character-by-character streaming. |
 | `...rest`    | `ComponentPropsWithoutRef<typeof as>` |         | Any other props are forwarded to the chosen element/component. For `React.Fragment`, DOM-only props are not allowed. |
+
+`onUnitStart` and `onUnitComplete` receive `{ unitIndex, unit }`, where `unit.type` is one of `text_stream`, `instant_render`, or `nested_stream`.
 
 ## Styling
 

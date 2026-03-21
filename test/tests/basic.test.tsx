@@ -251,6 +251,44 @@ describe('TreeStream', () => {
 		root.unmount();
 	});
 
+	it('emits lifecycle callbacks for stream runs and units', async () => {
+		const onStart = vi.fn();
+		const onUnitStart = vi.fn();
+		const onUnitComplete = vi.fn();
+		const onComplete = vi.fn();
+
+		const { container } = render(
+			<TreeStream
+				interval={10}
+				speed={1}
+				onStart={onStart}
+				onUnitStart={onUnitStart}
+				onUnitComplete={onUnitComplete}
+				onComplete={onComplete}
+			>
+				<a href="#one">One</a>
+				{'Two'}
+				<TreeStream as="span">{'Three'}</TreeStream>
+			</TreeStream>,
+		);
+
+		const host = container.querySelector('[data-tree-stream]') as HTMLElement;
+		await runUntilComplete(host, 5000, 10);
+
+		expect(onStart).toHaveBeenCalledTimes(1);
+		expect(onUnitStart.mock.calls.map(([event]) => [event.unitIndex, event.unit.type])).toEqual([
+			[0, 'instant_render'],
+			[1, 'text_stream'],
+			[2, 'nested_stream'],
+		]);
+		expect(onUnitComplete.mock.calls.map(([event]) => [event.unitIndex, event.unit.type])).toEqual([
+			[0, 'instant_render'],
+			[1, 'text_stream'],
+			[2, 'nested_stream'],
+		]);
+		expect(onComplete).toHaveBeenCalledTimes(1);
+	});
+
 	it('exposes data attributes for streaming and completion', async () => {
 		const { container } = render(
 			<TreeStream interval={50} speed={1}>

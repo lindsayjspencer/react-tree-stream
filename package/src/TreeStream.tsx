@@ -23,6 +23,8 @@ import { initialStreamState, streamReducer } from './reducer';
  *    - interval: ms between ticks
  *    - streamBy: 'word' | 'character' determines tokenization of text units
  *    - autoStart: start streaming automatically when inputs/signature change
+ *    - onStart: called when a new run starts
+ *    - onUnitStart/onUnitComplete: called for each unit as it begins/completes
  *    - onComplete: called after the final unit completes (including nested)
  *  - DOM: adds data attributes for observability:
  *    - data-tree-stream, data-streaming, data-complete
@@ -81,6 +83,23 @@ type OwnProps = {
 	 * has finished streaming.
 	 */
 	onComplete?: () => void;
+	/**
+	 * Callback invoked when a stream run starts.
+	 */
+	onStart?: () => void;
+	/**
+	 * Callback invoked when a unit begins processing.
+	 */
+	onUnitStart?: (event: TreeStreamUnitEvent) => void;
+	/**
+	 * Callback invoked when a unit has finished processing.
+	 */
+	onUnitComplete?: (event: TreeStreamUnitEvent) => void;
+};
+
+export type TreeStreamUnitEvent = {
+	unitIndex: number;
+	unit: ExecutionUnit;
 };
 
 type AsProp<E extends React.ElementType> = { as?: E };
@@ -135,6 +154,9 @@ function isFragmentElementType(as: React.ElementType | undefined): as is typeof 
  * @param props.interval - Minimum delay between ticks (default: 50)
  * @param props.streamBy - Tokenization strategy: 'word' or 'character' (default: 'word')
  * @param props.autoStart - Start streaming automatically on mount/change (default: true)
+ * @param props.onStart - Callback when a stream run starts
+ * @param props.onUnitStart - Callback when a unit begins processing
+ * @param props.onUnitComplete - Callback when a unit finishes processing
  * @param props.onComplete - Callback when streaming completes (including nested streams)
  *
  * @returns A React element that streams its content progressively
@@ -172,17 +194,26 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 	streamBy = 'word',
 	autoStart = true,
 	onComplete,
+	onStart,
+	onUnitStart,
+	onUnitComplete,
 	...rest
 }: TreeStreamProps<E>) {
 	const instanceId = useId();
 	const tickStep = Math.max(1, speed ?? 1);
 	const tickDelay = Math.max(0, interval ?? 0);
 
-	// Keep latest onComplete in a ref to avoid effect resubscribes
+	// Keep latest callbacks in refs to avoid effect resubscribes
 	const onCompleteRef = useRef<(() => void) | undefined>(onComplete);
+	const onStartRef = useRef<(() => void) | undefined>(onStart);
+	const onUnitStartRef = useRef<((event: TreeStreamUnitEvent) => void) | undefined>(onUnitStart);
+	const onUnitCompleteRef = useRef<((event: TreeStreamUnitEvent) => void) | undefined>(onUnitComplete);
 	useEffect(() => {
 		onCompleteRef.current = onComplete;
-	}, [onComplete]);
+		onStartRef.current = onStart;
+		onUnitStartRef.current = onUnitStart;
+		onUnitCompleteRef.current = onUnitComplete;
+	}, [onComplete, onStart, onUnitStart, onUnitComplete]);
 
 	// Build plan & a stable signature
 	const plan = useMemo(() => buildPlan(children), [children]);
@@ -238,12 +269,15 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 						}
 
 						const units = streamBy === 'character' ? unit.content.split('') : unit.content.split(/(\s+)/);
+						onUnitStartRef.current?.({ unitIndex: nextUnitIndex, unit });
 						activeTextUnitRef.current = nextUnitIndex;
 						dispatch({ type: 'BEGIN_TEXT', unitIndex: nextUnitIndex, tokens: units });
 						return;
 					}
 					case 'instant_render': {
+						onUnitStartRef.current?.({ unitIndex: nextUnitIndex, unit });
 						dispatch({ type: 'INSTANT_RENDER', unitIndex: nextUnitIndex, node: unit.content });
+						onUnitCompleteRef.current?.({ unitIndex: nextUnitIndex, unit });
 						dispatch({ type: 'ADVANCE' });
 						nextUnitIndex += 1;
 						remainingBudget -= 1;
@@ -269,11 +303,13 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 							| undefined;
 						const followingUnitIndex = nextUnitIndex + 1;
 						const remainingBudgetAfterChild = remainingBudget - 1;
+						onUnitStartRef.current?.({ unitIndex: nextUnitIndex, unit });
 						const composed = () => {
 							try {
 								childExisting?.();
 							} finally {
 								dispatch({ type: 'NESTED_DONE' });
+								onUnitCompleteRef.current?.({ unitIndex: nextUnitIndex, unit });
 								dispatch({ type: 'ADVANCE' });
 
 								if (followingUnitIndex >= latestPlanRef.current.length) {
@@ -309,6 +345,11 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 	useEffect(() => {
 		if (!text.streaming || text.tokens.length === 0) return;
 		if (text.index >= text.tokens.length) {
+			const activeUnit = activeTextUnitRef.current;
+			const completedUnit = activeUnit != null ? latestPlanRef.current[activeUnit] : undefined;
+			if (activeUnit != null && completedUnit) {
+				onUnitCompleteRef.current?.({ unitIndex: activeUnit, unit: completedUnit });
+			}
 			dispatch({ type: 'END_TEXT' });
 			const next = currentUnit + 1;
 			dispatch({ type: 'ADVANCE' });
@@ -341,7 +382,10 @@ export function TreeStream<E extends React.ElementType = 'div'>({
 			onCompleteRef.current?.();
 			return;
 		}
-		if (autoStart) runUnit(0);
+		if (autoStart) {
+			onStartRef.current?.();
+			runUnit(0);
+		}
 
 		return () => {
 			cancelAll();
